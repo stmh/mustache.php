@@ -51,6 +51,22 @@ class Mustache_Parser
                 continue;
             } else {
                 switch ($token[Mustache_Tokenizer::TYPE]) {
+                    case Mustache_Tokenizer::T_PRAGMA:
+                        // save pragmas for later :)
+                        $this->pragmas[$token[Mustache_Tokenizer::NAME]] = true;
+                        $nodes[] = $token;
+                        break;
+
+                    case Mustache_Tokenizer::T_BLOCK:
+                        if (isset($this->pragmas[Mustache_Engine::PRAGMA_BLOCKS])) {
+                            $nodes[] = $this->buildTree($tokens, $token);
+                        } else {
+                            $token[Mustache_Tokenizer::TYPE] = Mustache_Tokenizer::T_ESCAPED;
+                            $token[Mustache_Tokenizer::NAME] = '$'.$token[Mustache_Tokenizer::NAME];
+                            $nodes[] = $token;
+                        }
+                        break;
+
                     case Mustache_Tokenizer::T_SECTION:
                     case Mustache_Tokenizer::T_INVERTED:
                         $nodes[] = $this->buildTree($tokens, $token);

@@ -17,12 +17,13 @@
 class Mustache_Compiler
 {
 
+    private $pragmas;
+    private $blocks;
     private $sections;
     private $source;
     private $indentNextLine;
     private $customEscape;
     private $charset;
-    private $pragmas;
 
     /**
      * Compile a Mustache token parse tree into PHP source code.
@@ -32,17 +33,20 @@ class Mustache_Compiler
      * @param string $name         Mustache Template class name
      * @param bool   $customEscape (default: false)
      * @param string $charset      (default: 'UTF-8')
+     * @param string $parent       Mustache Template parent class name
      *
      * @return string Generated PHP source code
      */
-    public function compile($source, array $tree, $name, $customEscape = false, $charset = 'UTF-8')
+    public function compile($source, array $tree, $name, $customEscape = false, $charset = 'UTF-8', $parent = 'Mustache_Template')
     {
         $this->pragmas        = array();
+        $this->blocks         = array();
         $this->sections       = array();
         $this->source         = $source;
         $this->indentNextLine = true;
         $this->customEscape   = $customEscape;
         $this->charset        = $charset;
+        $this->parent         = $parent;
 
         return $this->writeCode($tree, $name);
     }
@@ -87,6 +91,14 @@ class Mustache_Compiler
                     );
                     break;
 
+                case Mustache_Tokenizer::T_BLOCK:
+                    $code .= $this->block(
+                        $node[Mustache_Tokenizer::NODES],
+                        $node[Mustache_Tokenizer::NAME],
+                        $level
+                    );
+                    break;
+
                 case Mustache_Tokenizer::T_PARTIAL:
                 case Mustache_Tokenizer::T_PARTIAL_2:
                     $code .= $this->partial(
@@ -120,26 +132,40 @@ class Mustache_Compiler
         return $code;
     }
 
-    const KLASS = '<?php
+    const REQUIRE_PARENT = '
+        if (!class_exists("%s", false)) {
+            require dirname(__FILE__)."/%s.php";
+        }';
 
-        class %s extends Mustache_Template
+    const KLASS = '<?php
+        %s
+
+        class %s extends %s
         {
             private $lambdaHelper;
 
             public function renderInternal(Mustache_Context $context, $indent = \'\', $escape = false)
             {
                 $this->lambdaHelper = new Mustache_LambdaHelper($this->mustache, $context);
-                $buffer = \'\';
-        %s
 
-                if ($escape) {
-                    return %s;
-                } else {
-                    return $buffer;
-                }
+                %s
             }
         %s
+        %s
         }';
+
+    const RENDER_INTERNAL = '
+        $buffer = \'\';
+        %s
+
+        if ($escape) {
+            return %s;
+        } else {
+            return $buffer;
+        }
+    ';
+
+    const SUBLCASS_RENDER_INTERNAL = 'return parent::renderInternal($context, $indent, $escape);';
 
     /**
      * Generate Mustache Template class PHP source.
@@ -152,9 +178,18 @@ class Mustache_Compiler
     private function writeCode($tree, $name)
     {
         $code     = $this->walk($tree);
+        $blocks   = implode("\n", $this->blocks);
         $sections = implode("\n", $this->sections);
 
-        return sprintf($this->prepare(self::KLASS, 0, false), $name, $code, $this->getEscape('$buffer'), $sections);
+        if ($this->parent !== 'Mustache_Template') {
+            $require = sprintf($this->prepare(self::REQUIRE_PARENT, -1), $this->parent, $this->parent);
+            $body    = self::SUBLCASS_RENDER_INTERNAL;
+        } else {
+            $require = '';
+            $body    = sprintf($this->prepare(self::RENDER_INTERNAL, 2, false), $code, $this->getEscape('$buffer'));
+        }
+
+        return sprintf($this->prepare(self::KLASS, 0, false), $require, $name, $this->parent, $body, $blocks, $sections);
     }
 
     const SECTION_CALL = '
@@ -237,6 +272,40 @@ class Mustache_Compiler
         $id     = var_export($id, true);
 
         return sprintf($this->prepare(self::INVERTED_SECTION, $level), $id, $method, $id, $this->walk($nodes, $level));
+    }
+
+    const BLOCK_CALL = '
+        // %s block
+        $buffer .= $this->block%s($context, $indent);
+    ';
+
+    const BLOCK = '
+        // %s block
+        protected function block%s(Mustache_Context $context, $indent) {
+            $buffer = \'\';
+            %s
+            return $buffer;
+        }';
+
+    /**
+     * Generate Mustache Template block PHP source.
+     *
+     * @param array  $nodes Array of child tokens
+     * @param string $id    Block name
+     * @param int    $level
+     *
+     * @return string Generated block PHP source code
+     */
+    private function block($nodes, $id, $level)
+    {
+        $key = ucfirst(md5($id));
+        if (isset($this->blocks[$key])) {
+            throw new InvalidArgumentException(sprintf('Duplicate block name: %s', $id));
+        }
+
+        $this->blocks[$key] = sprintf($this->prepare(self::BLOCK), $id, $key, $this->walk($nodes, 0));
+
+        return sprintf($this->prepare(self::BLOCK_CALL, $level), $id, $key);
     }
 
     const PARTIAL = '
