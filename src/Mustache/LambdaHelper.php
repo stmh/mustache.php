@@ -47,6 +47,11 @@ class Mustache_LambdaHelper
             ->renderInternal($this->context);
     }
 
+    /**
+     * getter for the context
+     * 
+     * @return the current context
+     */
     public function getContext() 
     {
         return $this->context;
